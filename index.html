@@ -152,7 +152,9 @@
 <script>
 // ── Data dari file Excel asli ──
 const SHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRM34np42xWfuf9eH8Cti25V03L-5y5ih51G_ZazqVEPEpaN769MAzwQiqBy8pWHQhgjTNjzSaujptU/pub?output=csv';
-let DATA = []; // Variabel DATA sekarang kosong duluan
+let DATA = []; 
+let activeKec = null;
+let activeMarkers = [];
 
 async function loadDataFromSheets() {
   try {
@@ -162,22 +164,23 @@ async function loadDataFromSheets() {
     Papa.parse(csvText, {
       header: true,
       dynamicTyping: true,
+      skipEmptyLines: true, // Abaikan baris kosong
       complete: function(results) {
         // Pindahkan data dari Sheets ke variabel DATA
         DATA = results.data.map(row => ({
-          nama: row.Nama,
-          kec: row.Kecamatan,
-          kat: row.Kategori,
-          tim: row.Tim,
-          lat: parseFloat(row.Lat),
-          lng: parseFloat(row.Lng),
-          // Jika statusnya "Sudah", beri warna merah. Jika belum, warnanya null (default)
-          color: row.Status_Survey === "Sudah" ? "red" : null 
-        })).filter(row => !isNaN(row.lat) && !isNaN(row.lng)); // Buang baris yang kosong
+          nama: row.Nama || "Tanpa Nama",
+          kec: row.Kecamatan || "Tidak Diketahui",
+          kat: row.Kategori || "Lainnya",
+          tim: row.Tim || "-",
+          // Gunakan replace agar aman dari format koma (Indonesia) di Google Sheets
+          lat: parseFloat(String(row.Lat).replace(',', '.')),
+          lng: parseFloat(String(row.Lng).replace(',', '.')),
+          // Jika status "Sudah", beri warna merah
+          color: (row.Status_Survey && row.Status_Survey.toString().trim().toLowerCase() === "sudah") ? "red" : null 
+        })).filter(row => !isNaN(row.lat) && !isNaN(row.lng)); // Buang data yang koordinatnya rusak
 
-        // Setelah data berhasil masuk, baru kita bangun list kecamatan dan peta
-        buildKecList('kec-list');
-        buildKecList('kec-list-mobile');
+        // Setelah data berhasil masuk, eksekusi pembuatan list dan render peta
+        buildKecList();
         render(null, '');
       }
     });
@@ -185,8 +188,10 @@ async function loadDataFromSheets() {
     console.error("Gagal memuat data dari Google Sheets:", error);
   }
 }
-// ============================================================
 
+// ============================================================
+// KONFIGURASI PETA & MARKER
+// ============================================================
 const COLORS  = { "Sekolah":"#378ADD", "Penginapan":"#3B6D11", "Posko Tim":"#D85A30" };
 const BADGES  = { "Sekolah":"badge-school", "Penginapan":"badge-nginap", "Posko Tim":"badge-posko" };
 
@@ -208,21 +213,17 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r
   maxZoom: 19
 }).addTo(map);
 
-// ── GeoJSON dimuat dari file eksternal ──
-// Ganti URL di bawah sesuai lokasi file kecamatan.geojson kamu
+// ── GeoJSON batas kecamatan ──
 const GEOJSON_URL = 'kecamatan.geojson';
-
-// Warna per kecamatan (highlight saat filter aktif)
 const KEC_COLORS = [
-  "#1a6fa8","#2e8b57","#c0392b","#8e44ad","#d35400",
-  "#16a085","#2980b9","#27ae60","#e74c3c","#9b59b6",
-  "#f39c12","#1abc9c","#e67e22","#3498db","#2ecc71",
-  "#e91e63","#00bcd4","#ff5722","#607d8b","#795548",
-  "#ff9800","#9c27b0","#4caf50","#f44336"
+  "#1a6fa8","#2e8b57","#c0392b","#8e44ad","#d35400","#16a085","#2980b9","#27ae60",
+  "#e74c3c","#9b59b6","#f39c12","#1abc9c","#e67e22","#3498db","#2ecc71","#e91e63",
+  "#00bcd4","#ff5722","#607d8b","#795548","#ff9800","#9c27b0","#4caf50","#f44336"
 ];
 
 let kecLayerGroup = L.layerGroup().addTo(map);
 let kecLayers = {};
+let KEC_GEOJSON = null;
 
 function drawBoundaries(highlightKec) {
   if (!KEC_GEOJSON) return;
@@ -242,13 +243,8 @@ function drawBoundaries(highlightKec) {
         dashArray: isHighlight ? null : "5 4"
       }
     });
-    // Tooltip nama kecamatan saat hover
-    layer.bindTooltip(nama, {
-      permanent: false, sticky: true,
-      className: 'kec-tooltip',
-      direction: 'center'
-    });
-    // Label permanen di tengah wilayah
+    
+    layer.bindTooltip(nama, { permanent: false, sticky: true, className: 'kec-tooltip', direction: 'center' });
     const center = layer.getBounds().getCenter();
     const label = L.marker(center, {
       icon: L.divIcon({
@@ -266,11 +262,6 @@ function drawBoundaries(highlightKec) {
   });
 }
 
-let activeMarkers = [];
-
-// Fetch GeoJSON lalu inisialisasi peta
-let KEC_GEOJSON = null;
-
 async function loadGeoJSON() {
   try {
     const res = await fetch(GEOJSON_URL);
@@ -279,12 +270,12 @@ async function loadGeoJSON() {
     drawBoundaries(null);
   } catch (err) {
     console.warn('GeoJSON tidak dapat dimuat:', err.message);
-    // Tetap lanjut tanpa batas wilayah
   }
 }
 
-loadGeoJSON();
-let activeKec = null;
+// ============================================================
+// RENDER UI & LOGIKA DATA
+// ============================================================
 
 function popupHTML(d) {
   return `<div class="popup-card">
@@ -302,59 +293,73 @@ function render(filterKec, filterSearch) {
   activeMarkers.forEach(m => map.removeLayer(m));
   activeMarkers = [];
   let s=0, n=0, p=0;
+  
   DATA.forEach(d => {
     const matchKec = !filterKec || d.kec === filterKec;
     const q = (filterSearch||"").toLowerCase();
     const matchSearch = !q || d.nama.toLowerCase().includes(q) || d.kec.toLowerCase().includes(q) || d.kat.toLowerCase().includes(q);
     if (!matchKec || !matchSearch) return;
+    
+    // Warnai dot berdasarkan logika dari Google Sheets
     const m = L.marker([d.lat, d.lng], { icon: pinIcon(d.kat, d.color) })
       .addTo(map)
       .bindPopup(popupHTML(d), { maxWidth: 260 });
+      
     activeMarkers.push(m);
-    if (d.kat==="Sekolah") s++;
-    if (d.kat==="Penginapan") n++;
-    if (d.kat==="Posko Tim") p++;
+    
+    if (d.kat.toLowerCase() === "sekolah") s++;
+    if (d.kat.toLowerCase() === "penginapan") n++;
+    if (d.kat.toLowerCase() === "posko tim") p++;
   });
+  
   document.getElementById('h-total').textContent  = s+n+p;
   document.getElementById('h-school').textContent = s;
   document.getElementById('h-nginap').textContent = n;
   document.getElementById('h-posko').textContent  = p;
 }
 
-// Build kecamatan list
-const kecList = document.getElementById('kec-list');
-const allKec  = [...new Set(DATA.map(d => d.kec))].sort();
-const kecCount = {};
-DATA.forEach(d => kecCount[d.kec] = (kecCount[d.kec]||0)+1);
+// ── Fungsi untuk merakit tombol filter kecamatan ──
+function buildKecList() {
+  const kecList = document.getElementById('kec-list');
+  kecList.innerHTML = ''; // Bersihkan list sebelum membuat baru
+  
+  const allKec  = [...new Set(DATA.map(d => d.kec))].sort();
+  const kecCount = {};
+  DATA.forEach(d => kecCount[d.kec] = (kecCount[d.kec]||0)+1);
 
-function makeBtn(label, kec) {
-  const btn = document.createElement('button');
-  btn.className = 'kec-btn' + (kec===null?' active':'');
-  btn.innerHTML = label + `<span class="kec-count">${kec===null ? DATA.length : kecCount[kec]}</span>`;
-  btn.onclick = () => {
-    activeKec = kec;
-    document.querySelectorAll('.kec-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    render(activeKec, document.getElementById('search-input').value);
-    drawBoundaries(kec);
-    if (kec !== null) {
-      const pts = DATA.filter(d => d.kec === kec);
-      if (pts.length) map.flyTo([pts[0].lat, pts[0].lng], 13, { duration: 1 });
-    } else {
-      map.flyTo([-7.838, 113.307], 10, { duration: 1 });
-    }
-  };
-  return btn;
+  function makeBtn(label, kec) {
+    const btn = document.createElement('button');
+    btn.className = 'kec-btn' + (kec === null ? ' active' : '');
+    btn.innerHTML = label + `<span class="kec-count">${kec === null ? DATA.length : kecCount[kec]}</span>`;
+    
+    btn.onclick = () => {
+      activeKec = kec;
+      document.querySelectorAll('.kec-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      render(activeKec, document.getElementById('search-input').value);
+      drawBoundaries(kec);
+      if (kec !== null) {
+        const pts = DATA.filter(d => d.kec === kec);
+        if (pts.length) map.flyTo([pts[0].lat, pts[0].lng], 13, { duration: 1 });
+      } else {
+        map.flyTo([-7.838, 113.307], 10, { duration: 1 });
+      }
+    };
+    return btn;
+  }
+
+  kecList.appendChild(makeBtn('Semua Kecamatan', null));
+  allKec.forEach(kec => kecList.appendChild(makeBtn(kec, kec)));
 }
 
-kecList.appendChild(makeBtn('Semua Kecamatan', null));
-allKec.forEach(kec => kecList.appendChild(makeBtn(kec, kec)));
-
+// ── Event Listener Pencarian ──
 document.getElementById('search-input').addEventListener('input', e => {
   render(activeKec, e.target.value);
 });
 
-loadDataFromSheets();
+// ── Inisialisasi Aplikasi ──
+loadGeoJSON(); // Tarik garis batas admin
+loadDataFromSheets(); // Tarik data dari Excel & Render Peta
 </script>
 </body>
 </html>
