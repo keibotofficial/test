@@ -682,18 +682,40 @@ function laporPosisi() {
       .then(response => response.json())
       .then(result => {
         if (result.status === "success") {
-          alert(`✅ Sukses! Posisi Tim ${team} telah dikirim ke Posko Utama.\n(Lat: ${lat.toFixed(5)}, Lng: ${lng.toFixed(5)})`);
+          alert(`✅ Sukses! Posisi Tim ${team} telah dikirim ke Posko Utama.`);
+          
+          // --- TAMBAHAN BARU: MUNCULKAN TITIK DI PETA LOKAL ---
+          
+          // 1. Buat icon khusus berbentuk titik berdenyut atau lingkaran warna
+          const userIcon = L.divIcon({
+            className: 'custom-user-icon',
+            html: `<div style="background-color:#e74c3c; width:16px; height:16px; border-radius:50%; border:3px solid white; box-shadow: 0 0 8px rgba(0,0,0,0.6);"></div>`,
+            iconSize: [16, 16],
+            iconAnchor: [8, 8]
+          });
+
+          // 2. Hapus marker posisi lama di layar HP ini (jika sebelumnya sudah pernah lapor)
+          if (window.myPositionMarker) {
+            map.removeLayer(window.myPositionMarker);
+          }
+
+          // 3. Tambahkan marker posisi baru ke peta
+          window.myPositionMarker = L.marker([lat, lng], {icon: userIcon})
+            .addTo(map)
+            .bindPopup(`<b>📍 Posisi Saat Ini</b><br>Tim ${team}`)
+            .openPopup();
+
+          // 4. Geser peta agar otomatis fokus ke posisi tersebut
+          map.setView([lat, lng], 14); // Angka 14 adalah level zoom
+          
+          // ----------------------------------------------------
+
         } else {
           alert('❌ Gagal menyimpan data di sistem. Coba lagi nanti.');
         }
         btn.innerHTML = '📍 Lapor Posisi';
         btn.disabled = false;
       })
-      .catch(error => {
-        alert('❌ Terjadi kesalahan jaringan. Pastikan koneksi internet stabil.');
-        btn.innerHTML = '📍 Lapor Posisi';
-        btn.disabled = false;
-      });
     },
     (error) => {
       alert('❌ Gagal mengambil lokasi. Pastikan GPS menyala dan izin lokasi diizinkan di browser.');
