@@ -725,6 +725,90 @@ function laporPosisi() {
     { enableHighAccuracy: true, timeout: 15000 }
   );
 }
+
+// ============================================================
+// FITUR RADAR PENGAWAS (MEMBACA LOG POSISI)
+// ============================================================
+
+// Masukkan link CSV khusus untuk tab "Log_Posisi" di bawah ini:
+const LOG_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRM34np42xWfuf9eH8Cti25V03L-5y5ih51G_ZazqVEPEpaN769MAzwQiqBy8pWHQhgjTNjzSaujptU/pub?gid=890518645&single=true&output=csv';
+
+let teamMarkers = []; // Menyimpan marker tim agar bisa dihapus/diupdate
+
+async function loadTeamLocations() {
+  if (!LOG_URL || LOG_URL.includes('TARUH_LINK')) return;
+
+  try {
+    const response = await fetch(LOG_URL);
+    const csvText = await response.text();
+    
+    Papa.parse(csvText, {
+      header: true,
+      dynamicTyping: true,
+      skipEmptyLines: true,
+      complete: function(results) {
+        
+        // 1. Bersihkan marker tim lama di peta sebelum menggambar yang baru
+        teamMarkers.forEach(m => map.removeLayer(m));
+        teamMarkers = [];
+
+        // 2. Saring data untuk mencari POSISI TERAKHIR setiap tim
+        const posisiTerakhir = {};
+        results.data.forEach(row => {
+          if (row.Tim && row.Lat && row.Lng) {
+            // Karena data di Sheets bertambah ke bawah, baris terbawah otomatis menimpa baris lama
+            let lat = parseFloat(String(row.Lat).replace(',', '.'));
+            let lng = parseFloat(String(row.Lng).replace(',', '.'));
+            
+            if (!isNaN(lat) && !isNaN(lng)) {
+              posisiTerakhir[row.Tim] = {
+                waktu: row.Waktu,
+                lat: lat,
+                lng: lng
+              };
+            }
+          }
+        });
+
+        // 3. Gambar marker posisi tim di peta
+        Object.keys(posisiTerakhir).forEach(namaTim => {
+          const pos = posisiTerakhir[namaTim];
+          
+          // Buat desain icon bulat spesial untuk tim lapangan (Warna Biru Tua + Teks Kuning)
+          const inisial = namaTim.substring(0, 2).toUpperCase();
+          const tIcon = L.divIcon({
+            className: 'team-tracker-icon',
+            html: `<div style="background:#2c3e50; color:#f1c40f; border:2px solid #fff; border-radius:50%; width:30px; height:30px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:bold; box-shadow:0 3px 6px rgba(0,0,0,0.6); z-index:1000;">${inisial}</div>`,
+            iconSize: [30, 30],
+            iconAnchor: [15, 15],
+            popupAnchor: [0, -15]
+          });
+
+          // Tempatkan marker di peta. zIndexOffset memastikan icon tim selalu berada di atas icon sekolah
+          const m = L.marker([pos.lat, pos.lng], {icon: tIcon, zIndexOffset: 1000})
+            .bindPopup(`
+              <div style="font-family:'Segoe UI',sans-serif; text-align:center;">
+                <b style="font-size:14px; color:#2c3e50;">🚙 Tim ${namaTim}</b><br>
+                <span style="font-size:11px; color:#888;">Update Terakhir:</span><br>
+                <span style="font-size:12px; font-weight:600; color:#e74c3c;">${pos.waktu}</span>
+              </div>
+            `);
+            
+          m.addTo(map);
+          teamMarkers.push(m);
+        });
+      }
+    });
+  } catch (error) {
+    console.error("Gagal memuat data log posisi tim:", error);
+  }
+}
+
+// 4. Panggil fungsinya saat web pertama kali dibuka
+loadTeamLocations();
+
+// 5. AUTO-REFRESH: Tarik data terbaru secara otomatis setiap 5 menit (300.000 milidetik)
+setInterval(loadTeamLocations, 300000);
 </script>
 </body>
 </html>
